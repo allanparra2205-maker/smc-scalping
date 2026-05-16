@@ -7,7 +7,7 @@ valida la señal con IA (Groq) y retorna la decisión final.
 import os
 import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 import httpx
