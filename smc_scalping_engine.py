@@ -235,15 +235,15 @@ def get_params(timeframe: str) -> ScalpingParams:
         ranging_atr_mult=5.0,
         min_candles=40,
         atr_period=14,
-        ob_strength_min=0.33,
-        fvg_gap_atr=0.25,
+        ob_strength_min=0.22,      # era 0.33
+        fvg_gap_atr=0.20,          # era 0.25
         sweep_lookback=4,
         choch_lookback=10,
         momentum_lookback=6,
         spread_max_atr=0.28,
-        score_threshold=5,
+        score_threshold=4,         # era 5
         rr_min=1.5,
-        zone_proximity_atr=1.2,
+        zone_proximity_atr=1.8,    # era 1.2
     )
 
 
@@ -1470,7 +1470,7 @@ def analyze(
         "tp_valido":          result.tp1 != 0,
         "rr_suficiente":      result.rr1 >= params.rr_min,
         "precio_en_zona":     price_in_zone,
-        "entry_trigger":      entry_triggered,
+        "entry_trigger":      entry_triggered or result.score >= 7,
     }
 
     result.valid = all(checks.values())
