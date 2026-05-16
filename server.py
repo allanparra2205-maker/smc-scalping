@@ -83,74 +83,101 @@ class SignalOut(BaseModel):
 # PROMPT GROQ
 # ═══════════════════════════════════════════════════════════════
 
-def build_groq_prompt(result: smc.SMCAnalysis, symbol: str) -> str:
+def _describir_vela_srv(c: dict, idx: int) -> str:
+    o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
+    cuerpo    = abs(cl - o)
+    rng       = max(h - l, 1e-9)
+    meca_sup  = h - max(o, cl)
+    meca_inf  = min(o, cl) - l
+    tipo      = "ALCISTA" if cl > o else "BAJISTA" if cl < o else "DOJI"
+    fuerza    = "FUERTE" if cuerpo / rng > 0.6 else "DÉBIL"
+    mechas    = ""
+    if meca_sup > cuerpo * 1.5:
+        mechas = " [MECHA_SUP_LARGA]"
+    elif meca_inf > cuerpo * 1.5:
+        mechas = " [MECHA_INF_LARGA]"
+    return f"  V{idx:02d}: {tipo} {fuerza} O:{o:.2f} H:{h:.2f} L:{l:.2f} C:{cl:.2f}{mechas}"
+
+
+def _patron_srv(candles: list) -> str:
+    if len(candles) < 3:
+        return "sin datos"
+    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+    if all(c["close"] > c["open"] for c in [c1, c2, c3]):
+        return "3 velas alcistas — impulso comprador"
+    if all(c["close"] < c["open"] for c in [c1, c2, c3]):
+        return "3 velas bajistas — impulso vendedor"
+    rng  = max(c3["high"] - c3["low"], 1e-9)
+    body = abs(c3["close"] - c3["open"])
+    ms   = c3["high"] - max(c3["close"], c3["open"])
+    mi   = min(c3["close"], c3["open"]) - c3["low"]
+    if ms > body * 1.5 and ms / rng > 0.45:
+        return "pin bar bajista — rechazo de altos"
+    if mi > body * 1.5 and mi / rng > 0.45:
+        return "pin bar alcista — rechazo de bajos"
+    if body / rng < 0.2:
+        return "doji — indecisión"
+    return "sin patrón claro"
+
+
+def build_groq_prompt(result: smc.SMCAnalysis, symbol: str, candles: list = None) -> str:
     ob_info = "ninguno"
     if result.nearest_ob:
         ob = result.nearest_ob
-        ob_info = f"{ob.direction} [{ob.mitigation_state}] {ob.bottom:.5f}-{ob.top:.5f} strength={ob.strength:.2f}"
+        ob_info = f"{ob.direction} {ob.bottom:.2f}-{ob.top:.2f} [{ob.mitigation_state}] fuerza:{ob.strength:.2f}"
 
     fvg_info = "ninguno"
     if result.nearest_fvg:
         fvg = result.nearest_fvg
-        fvg_info = f"{fvg.direction} [{fvg.fill_state}] {fvg.bottom:.5f}-{fvg.top:.5f} size={fvg.size:.5f}"
-
-    patron = result.candle_pattern.kind if result.candle_pattern else "ninguno"
-    patron_str = f"{patron} (fuerza {result.candle_pattern.strength:.0%})" if result.candle_pattern else "ninguno"
+        fvg_info = f"{fvg.direction} {fvg.bottom:.2f}-{fvg.top:.2f} [{fvg.fill_state}] size:{fvg.size:.2f}"
 
     confluencias_str = "\n".join(f"  - {c}" for c in result.confluencias) or "  (ninguna)"
 
-    return f"""Eres un trader institucional experto en SMC (Smart Money Concepts) y scalping.
-Analiza esta señal y da tu veredicto.
+    # Velas reales si están disponibles
+    velas_txt = "no disponibles"
+    patron_txt = "no disponible"
+    if candles and len(candles) >= 3:
+        recientes = candles[-12:]
+        velas_txt = "\n".join(_describir_vela_srv(c, i+1) for i, c in enumerate(recientes))
+        patron_txt = _patron_srv(candles)
 
-SÍMBOLO: {symbol}
-TEMPORALIDAD: {result.timeframe}
-DIRECCIÓN PROPUESTA: {result.direction}
+    return f"""Eres un trader institucional experto en {symbol} {result.timeframe} con enfoque SMC.
+Analiza las velas reales y el contexto SMC para decidir si esta señal es válida.
 
-ESTRUCTURA:
-  Tendencia interna : {result.trend}
-  BOS               : {result.last_bos}
-  CHoCH             : {result.last_choch}
-  Zona              : {result.zone} ({result.zone_pct:.0f}%)
+════ VELAS RECIENTES (más antigua → más reciente) ════
+{velas_txt}
 
-ZONAS INSTITUCIONALES:
-  Order Block : {ob_info}
-  FVG         : {fvg_info}
+Patrón en últimas 3 velas: {patron_txt}
 
-LIQUIDEZ:
-  BSL         : {result.buyside_liquidity}
-  SSL         : {result.sellside_liquidity}
-  Swept       : {result.liquidity_swept}
+════ CONTEXTO SMC ════
+Dirección   : {result.direction}
+Tendencia   : {result.trend}
+Zona        : {result.zone} ({result.zone_pct:.0f}%)
+BOS/CHoCH   : {result.last_bos} / {result.last_choch}
+Sweep       : {result.liquidity_swept}
+Momentum    : {result.momentum_dir} ({result.momentum_score:.0%})
+OB          : {ob_info}
+FVG         : {fvg_info}
+Score SMC   : {result.score}/10
+ATR         : {result.atr}
 
-MOMENTUM:
-  Dirección   : {result.momentum_dir}
-  Fuerza      : {result.momentum_score:.0%}
+════ NIVELES ════
+Entry:{result.entry} SL:{result.sl} TP1:{result.tp1}(RR{result.rr1}) TP2:{result.tp2}(RR{result.rr2})
 
-PATRÓN DE VELA: {patron_str}
-ENTRY TRIGGER : {"CONFIRMADO" if result.entry_triggered else "NO CONFIRMADO"}
-ATR           : {result.atr}
-
-NIVELES:
-  Entry : {result.entry}
-  SL    : {result.sl}
-  TP1   : {result.tp1}  (RR {result.rr1:.1f})
-  TP2   : {result.tp2}  (RR {result.rr2:.1f})
-
-CONFLUENCIAS SMC ({len(result.confluencias)}):
+════ CONFLUENCIAS ({len(result.confluencias)}) ════
 {confluencias_str}
 
-SCORE SMC: {result.score}/10
+════ RAZONA Y DECIDE ════
+1. ¿Las velas muestran rechazo real en la dirección propuesta?
+2. ¿El patrón confirma o contradice la señal?
+3. ¿El precio está en zona institucional válida o ya la superó?
+4. ¿Momentum apoya la entrada?
+5. ¿El SL tiene sentido?
 
-INSTRUCCIONES:
-Responde ÚNICAMENTE con un JSON válido, sin texto extra, sin markdown, sin explicaciones fuera del JSON.
-El JSON debe tener exactamente estas dos claves:
-  "score": número entero del 1 al 10
-  "comment": string de máximo 2 líneas con tu veredicto
+DESCARTAR si: últimas 3 velas van en dirección contraria sin rechazo, precio superó la zona, doji sin confirmación, momentum fuertemente contrario sin sweep, score <= 5 sin confluencias de peso.
 
-Criterios para el score:
-  8-10 : señal institucional clara, confluencias sólidas, buen RR, momentum alineado
-  5-7  : señal decente pero con alguna debilidad
-  3-4  : señal débil, pocas confluencias o RR marginal
-  1-2  : no operar, condiciones pobres o contradictorias
+Responde SOLO con JSON válido:
+{{"score": 1-10, "comment": "razonamiento breve en 1 línea"}}
 
 JSON:"""
 
@@ -246,7 +273,7 @@ async def analyze(
 
     # Solo llamar a Groq si hay señal con dirección real y score mínimo
     if result.direction != "NEUTRAL" and result.score >= 4:
-        prompt = build_groq_prompt(result, req.symbol)
+        prompt = build_groq_prompt(result, req.symbol, candles_raw)
         score_ai, ai_comment = await call_groq(prompt)
         log.info(f"[{req.timeframe}] AI Score: {score_ai} | {ai_comment[:80]}")
 
