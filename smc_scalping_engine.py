@@ -235,15 +235,15 @@ def get_params(timeframe: str) -> ScalpingParams:
         ranging_atr_mult=5.0,
         min_candles=40,
         atr_period=14,
-        ob_strength_min=0.22,      # era 0.33
-        fvg_gap_atr=0.20,          # era 0.25
+        ob_strength_min=0.33,
+        fvg_gap_atr=0.25,
         sweep_lookback=4,
         choch_lookback=10,
         momentum_lookback=6,
         spread_max_atr=0.28,
-        score_threshold=4,         # era 5
+        score_threshold=5,
         rr_min=1.5,
-        zone_proximity_atr=1.8,    # era 1.2
+        zone_proximity_atr=1.2,
     )
 
 
@@ -1130,13 +1130,14 @@ def _count_confluence_categories(confluencias: List[str]) -> Tuple[int, int, int
     """Cuenta por categoría: (structural, zone, confirmation)."""
     structural = zone = confirmation = 0
     for c in confluencias:
-        if any(k in c for k in ["Tendencia interna", "BOS ", "CHoCH "]):
+        # Confirmación primero para evitar que "CHoCH de confirmacion" caiga en structural
+        if any(k in c for k in ["Pin bar", "Engulfing", "Vela institucional",
+                                  "Barrido", "Momentum", "CHoCH de confirmacion"]):
+            confirmation += 1
+        elif any(k in c for k in ["Tendencia interna", "BOS ", "CHoCH "]):
             structural += 1
         elif any(k in c for k in ["OB ", "FVG ", "Precio en zona"]):
             zone += 1
-        elif any(k in c for k in ["Pin bar", "Engulfing", "Vela institucional",
-                                    "Barrido", "Momentum", "CHoCH de confirmacion"]):
-            confirmation += 1
     return structural, zone, confirmation
 
 
@@ -1432,12 +1433,15 @@ def analyze(
             f"{nombres.get(candle_pattern.kind, candle_pattern.kind)} (fuerza {candle_pattern.strength:.0%})"
         )
 
+    # La sesión suma al score pero NO se incluye en confluencias de confirmación
+    # para evitar que cc >= 1 se cumpla solo por la sesión.
     sesiones_validas = {"Londres", "Nueva York", "Overlap Londres-NY", "Tokio", "Sydney"}
+    session_bonus: List[str] = []
     if session in sesiones_validas:
-        confluencias.append(f"Sesion de alta liquidez: {session}")
+        session_bonus.append(f"Sesion de alta liquidez: {session}")
 
-    result.confluencias = confluencias
-    sc, zc, cc = _count_confluence_categories(confluencias)
+    result.confluencias = confluencias + session_bonus
+    sc, zc, cc = _count_confluence_categories(confluencias)  # solo confluencias reales
     result.structural_count = sc
     result.zone_count = zc
     result.confirmation_count = cc
@@ -1470,7 +1474,7 @@ def analyze(
         "tp_valido":          result.tp1 != 0,
         "rr_suficiente":      result.rr1 >= params.rr_min,
         "precio_en_zona":     price_in_zone,
-        "entry_trigger":      entry_triggered or result.score >= 7,
+        "entry_trigger":      entry_triggered,
     }
 
     result.valid = all(checks.values())
